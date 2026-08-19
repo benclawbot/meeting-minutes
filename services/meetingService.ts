@@ -1,8 +1,8 @@
 import { FFmpeg, FFFSType, type FSNode } from "@ffmpeg/ffmpeg";
 import coreURL from "@ffmpeg/core?url";
 import wasmURL from "@ffmpeg/core/wasm?url";
-import { openaiAuthHeaders } from "@openai-oauth/react";
 import { AnalysisResult } from "../types";
+import { getCompanionUrl } from "./localOAuth";
 
 const TARGET_RATE = 16000;
 const CHUNK_DURATION_SEC = 90;
@@ -68,7 +68,13 @@ const responseError = async (response: Response, fallback: string) => {
   return payload?.error || fallback;
 };
 
-const authHeaders = () => openaiAuthHeaders();
+const companionFetch = async (path: string, init: RequestInit) => {
+  try {
+    return await fetch(`${getCompanionUrl()}${path}`, init);
+  } catch {
+    throw new Error(`Compagnon OAuth local non détecté sur ${getCompanionUrl()}. Lancez \"npm run companion:start\" sur cet ordinateur.`);
+  }
+};
 
 export const analyzeMeetingVideo = async (
   mediaFile: File,
@@ -90,18 +96,16 @@ export const analyzeMeetingVideo = async (
       const chunkData = await ffmpeg.readFile(chunkPath);
       const wavBlob = new Blob([chunkData], { type: "audio/wav" });
       await ffmpeg.deleteFile(chunkPath).catch(() => false);
-      const headers = await authHeaders();
-      const response = await fetch("/api/transcribe", {
+      const response = await companionFetch("/transcribe", {
         method: "POST",
         headers: {
-          ...headers,
           "Content-Type": "audio/wav",
           "X-Audio-Filename": chunk.name,
           "X-Transcription-Language": locale,
         },
         body: wavBlob,
       });
-      if (!response.ok) throw new Error(await responseError(response, "Erreur de transcription"));
+      if (!response.ok) throw new Error(await responseError(response, "Erreur de transcription OAuth locale"));
       const data = await response.json() as { text?: string };
       if (data.text?.trim()) {
         const text = data.text.trim();
@@ -117,13 +121,12 @@ export const analyzeMeetingVideo = async (
   if (!transcript.trim()) throw new Error("Aucun contenu audio détecté dans le fichier.");
 
   onStatusChange?.("PROCESSING");
-  const headers = await authHeaders();
-  const response = await fetch("/api/analyze", {
+  const response = await companionFetch("/analyze", {
     method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, date, transcript, locale }),
   });
-  if (!response.ok) throw new Error(await responseError(response, "Erreur de génération"));
+  if (!response.ok) throw new Error(await responseError(response, "Erreur de génération OAuth locale"));
   const data = await response.json() as { minutes?: string; usage?: { input_tokens?: number; output_tokens?: number } };
   if (!data.minutes?.trim()) throw new Error("Aucun contenu généré.");
 

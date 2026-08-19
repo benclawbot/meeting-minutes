@@ -6,8 +6,11 @@ import {
   CheckCircle2,
   Clock,
   Download,
+  ExternalLink,
   FileText,
   Loader2,
+  LogIn,
+  LogOut,
   Mic2,
   Music,
   Sparkles,
@@ -15,10 +18,11 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { useSignInWithChatGPT } from '@openai-oauth/react';
 import { AnalysisResult, AnalysisStatus, DocxTemplateId, MediaFile, MeetingDetails, OutputLanguage, UsageMetrics } from './types';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { TokenTracker } from './components/TokenTracker';
-import { analyzeMeetingVideo } from './services/geminiService';
+import { analyzeMeetingVideo } from './services/meetingService';
 import { generateAndDownloadDocx } from './services/docxService';
 
 const ACCENT = {
@@ -27,7 +31,7 @@ const ACCENT = {
 };
 
 const TEMPLATES = [
-  { id: 'briefing' as DocxTemplateId, name: 'Anthropic', gradient: 'from-[#f3efe6] via-[#eee4d6] to-[#b9402d]' },
+  { id: 'briefing' as DocxTemplateId, name: 'Briefing', gradient: 'from-[#f3efe6] via-[#eee4d6] to-[#b9402d]' },
   { id: 'corporate' as DocxTemplateId, name: 'Corporate', gradient: 'from-slate-700 to-slate-800' },
   { id: 'modern' as DocxTemplateId, name: 'Modern', gradient: 'from-cyan-600 to-blue-700' },
   { id: 'executive' as DocxTemplateId, name: 'Executive', gradient: 'from-slate-800 to-black' },
@@ -39,7 +43,7 @@ const isProcessingStatus = (status: AnalysisStatus) =>
 const PipelineStepper: React.FC<{ status: AnalysisStatus }> = ({ status }) => {
   const order = [AnalysisStatus.EXTRACTING_AUDIO, AnalysisStatus.UPLOADING, AnalysisStatus.TRANSCRIBING, AnalysisStatus.PROCESSING];
   const current = order.indexOf(status);
-  const labels = ['Audio', 'Upload', 'Transcription', 'Analyse'];
+  const labels = ['Audio', 'Préparation', 'Transcription', 'Compte rendu'];
   const icons = [Clock, UploadCloud, Mic2, BrainCircuit];
   return (
     <div className="flex items-center">
@@ -95,6 +99,7 @@ const formatUiDate = (value: string) => {
 };
 
 const App: React.FC = () => {
+  const chatgpt = useSignInWithChatGPT();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetails>({ title: '', date: new Date().toISOString().split('T')[0] });
   const [mediaFile, setMediaFile] = useState<MediaFile | null>(null);
   const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
@@ -107,6 +112,18 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => { if (mediaFile?.previewUrl) URL.revokeObjectURL(mediaFile.previewUrl); }, [mediaFile]);
+
+  const handleLogin = () => {
+    setError(null);
+    void chatgpt.login();
+  };
+
+  const handleLogout = () => {
+    void chatgpt.logout();
+    setResult(null);
+    setUsage(null);
+    setStatus(AnalysisStatus.IDLE);
+  };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -128,6 +145,7 @@ const App: React.FC = () => {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!chatgpt.isSignedIn) { setError('Connectez-vous à ChatGPT avant de lancer le traitement.'); return; }
     if (!mediaFile || !meetingDetails.title || !meetingDetails.date) return;
     setError(null);
     try {
@@ -144,34 +162,59 @@ const App: React.FC = () => {
   };
 
   const isProcessing = isProcessingStatus(status);
-  const isDisabled = isProcessing;
-  const statusLabel = status === AnalysisStatus.EXTRACTING_AUDIO ? 'Extraction audio…' : status === AnalysisStatus.UPLOADING ? 'Préparation…' : status === AnalysisStatus.TRANSCRIBING ? 'Transcription…' : status === AnalysisStatus.PROCESSING ? 'Analyse en cours…' : status === AnalysisStatus.COMPLETED ? 'Analyse terminée' : status === AnalysisStatus.ERROR ? 'Erreur' : 'Prêt';
+  const authBusy = chatgpt.status === 'checking' || chatgpt.status === 'starting' || chatgpt.status === 'redirecting';
+  const authError = chatgpt.status === 'error' ? chatgpt.error.message : null;
+  const installUrl = chatgpt.status === 'needs-extension' ? chatgpt.installUrl : null;
+  const statusLabel = status === AnalysisStatus.EXTRACTING_AUDIO ? 'Extraction audio…' : status === AnalysisStatus.UPLOADING ? 'Préparation…' : status === AnalysisStatus.TRANSCRIBING ? 'Transcription…' : status === AnalysisStatus.PROCESSING ? 'Création du compte rendu…' : status === AnalysisStatus.COMPLETED ? 'Compte rendu terminé' : status === AnalysisStatus.ERROR ? 'Erreur' : 'Prêt';
+  const authButtonLabel = authBusy ? 'Connexion…' : chatgpt.status === 'needs-extension' ? 'Réessayer' : 'Se connecter avec ChatGPT';
 
   return (
     <div className="min-h-screen flex flex-col font-sans" style={{ background: ACCENT.pageBg, color: ACCENT.text }}>
       <header className="border-b bg-white/90 backdrop-blur-xl" style={{ borderColor: ACCENT.border }}>
-        <div className="max-w-7xl mx-auto px-5 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-5 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border bg-white" style={{ borderColor: ACCENT.border }}>
             <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetLight})` }}><Video className="w-4 h-4 text-white" /></div>
             <span className="text-sm font-bold">MeetingMind</span>
           </div>
-          <TokenTracker usage={usage} status={status} />
+          <div className="flex items-center gap-2">
+            <TokenTracker usage={usage} status={status} />
+            {chatgpt.isSignedIn ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-100 text-xs font-semibold">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">ChatGPT connecté</span>
+                <button type="button" onClick={handleLogout} title="Se déconnecter" className="p-0.5 rounded-full hover:bg-emerald-100"><LogOut className="w-3.5 h-3.5" /></button>
+              </div>
+            ) : (
+              <button type="button" onClick={handleLogin} disabled={authBusy} className="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs font-bold text-white disabled:opacity-50" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>
+                {authBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                <span className="hidden sm:inline">{authButtonLabel}</span>
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       {isProcessing && <div className="border-b bg-white/90 py-3 px-5" style={{ borderColor: ACCENT.border }}><div className="max-w-3xl mx-auto"><div className="flex justify-between mb-2"><span className="text-xs font-semibold" style={{ color: ACCENT.violet }}>{statusLabel}</span><span className="text-[10px] text-stone-500">{meetingDetails.title}</span></div><PipelineStepper status={status} /></div></div>}
 
       <main className="flex-1 max-w-7xl mx-auto px-5 py-8 w-full">
+        {(authError || installUrl) && <div className="mb-5 rounded-2xl border bg-white p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3" style={{ borderColor: authError ? '#FECACA' : ACCENT.border }}>
+          <div className="flex gap-3 items-start">
+            <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" style={{ color: authError ? '#DC2626' : ACCENT.violet }} />
+            <div><p className="text-sm font-bold">{authError ? 'Authentification ChatGPT' : 'Extension de connexion requise'}</p><p className="text-xs text-stone-500 mt-1">{authError || "Installez l’extension Sign in with ChatGPT, puis revenez ici et cliquez sur Réessayer."}</p></div>
+          </div>
+          {installUrl && <a href={installUrl} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full text-xs font-bold border bg-slate-50 whitespace-nowrap" style={{ borderColor: ACCENT.border }}>Installer l’extension<ExternalLink className="w-3.5 h-3.5" /></a>}
+        </div>}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <section className="lg:col-span-4 xl:col-span-3 space-y-4">
             <div className="rounded-3xl p-6 bg-white border shadow-sm" style={{ borderColor: ACCENT.border }}>
-              <div className="flex items-center justify-between gap-3 mb-5"><h2 className="text-sm font-black uppercase tracking-wider">Nouvelle réunion</h2><LanguageToggle value={outputLanguage} onChange={setOutputLanguage} disabled={isDisabled} /></div>
+              <div className="flex items-center justify-between gap-3 mb-5"><h2 className="text-sm font-black uppercase tracking-wider">Nouvelle réunion</h2><LanguageToggle value={outputLanguage} onChange={setOutputLanguage} disabled={isProcessing} /></div>
               <form onSubmit={handleSubmit} className="space-y-5">
-                <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Titre</label><input name="title" value={meetingDetails.title} onChange={e => setMeetingDetails(prev => ({ ...prev, title: e.target.value }))} required disabled={isDisabled} placeholder="Planification du lancement - Projet Orion" className="w-full rounded-2xl border px-4 py-3 text-sm bg-slate-50 outline-none focus:ring-1" style={{ borderColor: ACCENT.border }} /></div>
-                <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Date</label><input type="date" value={meetingDetails.date} onChange={e => setMeetingDetails(prev => ({ ...prev, date: e.target.value }))} required disabled={isDisabled} className="w-full rounded-2xl border px-4 py-3 text-sm bg-slate-50 outline-none" style={{ borderColor: ACCENT.border }} /></div>
-                <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Enregistrement</label>{!mediaFile ? <div onClick={() => !isDisabled && fileInputRef.current?.click()} className="rounded-2xl border-2 border-dashed p-7 text-center cursor-pointer bg-slate-50" style={{ borderColor: `${ACCENT.violet}55` }}><input ref={fileInputRef} type="file" onChange={handleFileChange} accept="video/mp4,.mp4,audio/x-m4a,audio/mp4,audio/m4a,.m4a" className="hidden" /><UploadCloud className="w-6 h-6 mx-auto mb-3" style={{ color: ACCENT.violet }} /><p className="text-sm font-bold">Glisser-déposer ou cliquer</p><p className="text-[10px] font-semibold uppercase text-stone-400 mt-1">MP4 ou M4A</p></div> : <FilePreview mediaFile={mediaFile} onClear={clearFile} disabled={isDisabled} />}</div>
+                <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Titre</label><input name="title" value={meetingDetails.title} onChange={e => setMeetingDetails(prev => ({ ...prev, title: e.target.value }))} required disabled={isProcessing} placeholder="Planification du lancement - Projet Orion" className="w-full rounded-2xl border px-4 py-3 text-sm bg-slate-50 outline-none focus:ring-1" style={{ borderColor: ACCENT.border }} /></div>
+                <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Date</label><input type="date" value={meetingDetails.date} onChange={e => setMeetingDetails(prev => ({ ...prev, date: e.target.value }))} required disabled={isProcessing} className="w-full rounded-2xl border px-4 py-3 text-sm bg-slate-50 outline-none" style={{ borderColor: ACCENT.border }} /></div>
+                <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Enregistrement</label>{!mediaFile ? <div onClick={() => !isProcessing && fileInputRef.current?.click()} className="rounded-2xl border-2 border-dashed p-7 text-center cursor-pointer bg-slate-50" style={{ borderColor: `${ACCENT.violet}55` }}><input ref={fileInputRef} type="file" onChange={handleFileChange} accept="video/mp4,.mp4,audio/x-m4a,audio/mp4,audio/m4a,.m4a" className="hidden" /><UploadCloud className="w-6 h-6 mx-auto mb-3" style={{ color: ACCENT.violet }} /><p className="text-sm font-bold">Glisser-déposer ou cliquer</p><p className="text-[10px] font-semibold uppercase text-stone-400 mt-1">MP4 ou M4A</p></div> : <FilePreview mediaFile={mediaFile} onClear={clearFile} disabled={isProcessing} />}</div>
                 {error && <div className="p-3 rounded-2xl flex gap-2 text-xs bg-red-50 border border-red-100 text-red-700"><AlertCircle className="w-4 h-4 shrink-0" />{error}</div>}
-                <button type="submit" disabled={!mediaFile || !meetingDetails.title || !meetingDetails.date || isProcessing} className="w-full px-4 py-3.5 rounded-full text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-40 flex items-center justify-center gap-2" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>{isProcessing && <Loader2 className="w-4 h-4 animate-spin" />}{isProcessing ? 'Analyse en cours…' : 'Générer le compte rendu'}</button>
+                <button type="submit" disabled={!chatgpt.isSignedIn || !mediaFile || !meetingDetails.title || !meetingDetails.date || isProcessing} className="w-full px-4 py-3.5 rounded-full text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-40 flex items-center justify-center gap-2" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>{isProcessing && <Loader2 className="w-4 h-4 animate-spin" />}{isProcessing ? 'Traitement en cours…' : chatgpt.isSignedIn ? 'Générer le compte rendu' : 'Connexion ChatGPT requise'}</button>
               </form>
             </div>
           </section>
@@ -186,7 +229,7 @@ const App: React.FC = () => {
                 <TemplatePicker selected={selectedTemplate} onChange={setSelectedTemplate} />
               </div>
               <div className="p-6 sm:p-8 overflow-auto custom-scrollbar"><div className="flex items-center gap-2 mb-5 text-stone-500"><FileText className="w-4 h-4" /><span className="text-[10px] uppercase tracking-widest font-bold">Compte rendu</span></div><MarkdownRenderer content={result.minutes} template={selectedTemplate} /></div>
-            </div> : <div className="h-full min-h-[560px] rounded-3xl bg-white border shadow-sm flex items-center justify-center p-8 text-center" style={{ borderColor: ACCENT.border }}><div className="max-w-md"><div className="w-16 h-16 rounded-2xl mx-auto mb-5 flex items-center justify-center" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetLight})` }}>{isProcessing ? <Loader2 className="w-8 h-8 animate-spin text-white" /> : <Sparkles className="w-8 h-8 text-white" />}</div><h3 className="text-3xl font-black mb-3">{isProcessing ? statusLabel : 'Prêt à analyser'}</h3><p className="text-sm text-stone-500">Importez un fichier MP4 ou M4A pour générer une transcription et un compte rendu structuré.</p></div></div>}
+            </div> : <div className="h-full min-h-[560px] rounded-3xl bg-white border shadow-sm flex items-center justify-center p-8 text-center" style={{ borderColor: ACCENT.border }}><div className="max-w-md"><div className="w-16 h-16 rounded-2xl mx-auto mb-5 flex items-center justify-center" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetLight})` }}>{isProcessing ? <Loader2 className="w-8 h-8 animate-spin text-white" /> : <Sparkles className="w-8 h-8 text-white" />}</div><h3 className="text-3xl font-black mb-3">{isProcessing ? statusLabel : 'Prêt à analyser'}</h3><p className="text-sm text-stone-500">Connectez ChatGPT une seule fois, puis importez un fichier MP4 ou M4A. La transcription et le compte rendu sont routés automatiquement.</p></div></div>}
           </section>
         </div>
       </main>

@@ -6,5 +6,10 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   server: { port: 3000, host: '0.0.0.0' },
   plugins: [react(), tailwindcss()],
-  resolve: { alias: { '@': path.resolve(__dirname, '.') } },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, '.'),
+      '@openai-oauth/react': path.resolve(__dirname, './services/localOAuth.ts'),
+    },
+  },
 });

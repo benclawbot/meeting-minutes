@@ -18,11 +18,11 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { useSignInWithChatGPT } from '@openai-oauth/react';
 import { AnalysisResult, AnalysisStatus, DocxTemplateId, MediaFile, MeetingDetails, OutputLanguage, UsageMetrics } from './types';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { TokenTracker } from './components/TokenTracker';
 import { analyzeMeetingVideo } from './services/meetingService';
-import { completeChatGPTLogin, getChatGPTSession, logoutChatGPT, startChatGPTLogin } from './services/chatgptOAuth';
 import { generateAndDownloadDocx } from './services/docxService';
 
 const ACCENT = {
@@ -36,8 +36,6 @@ const TEMPLATES = [
   { id: 'modern' as DocxTemplateId, name: 'Modern', gradient: 'from-cyan-600 to-blue-700' },
   { id: 'executive' as DocxTemplateId, name: 'Executive', gradient: 'from-slate-800 to-black' },
 ];
-
-type AuthStatus = 'checking' | 'signed-out' | 'signed-in' | 'needs-extension';
 
 const isProcessingStatus = (status: AnalysisStatus) =>
   status !== AnalysisStatus.IDLE && status !== AnalysisStatus.ERROR && status !== AnalysisStatus.COMPLETED;
@@ -101,61 +99,30 @@ const formatUiDate = (value: string) => {
 };
 
 const App: React.FC = () => {
+  const chatgpt = useSignInWithChatGPT();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetails>({ title: '', date: new Date().toISOString().split('T')[0] });
   const [mediaFile, setMediaFile] = useState<MediaFile | null>(null);
   const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [usage, setUsage] = useState<UsageMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
-  const [installUrl, setInstallUrl] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<DocxTemplateId>('briefing');
   const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('fr');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const session = await completeChatGPTLogin();
-        if (mounted) setAuthStatus(session ? 'signed-in' : 'signed-out');
-      } catch (err: any) {
-        if (mounted) {
-          setAuthStatus('signed-out');
-          setAuthError(err?.message || 'Connexion ChatGPT impossible.');
-        }
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
-
   useEffect(() => () => { if (mediaFile?.previewUrl) URL.revokeObjectURL(mediaFile.previewUrl); }, [mediaFile]);
 
-  const handleLogin = async () => {
-    setAuthError(null);
-    setInstallUrl(null);
-    setAuthStatus('checking');
-    try {
-      const existing = await getChatGPTSession();
-      if (existing) { setAuthStatus('signed-in'); return; }
-      const result = await startChatGPTLogin();
-      if (result.status === 'needs-extension') {
-        setInstallUrl(result.installUrl);
-        setAuthStatus('needs-extension');
-      }
-    } catch (err: any) {
-      setAuthStatus('signed-out');
-      setAuthError(err?.message || 'Connexion ChatGPT impossible.');
-    }
+  const handleLogin = () => {
+    setError(null);
+    void chatgpt.login();
   };
 
   const handleLogout = () => {
-    logoutChatGPT();
-    setAuthStatus('signed-out');
-    setAuthError(null);
-    setInstallUrl(null);
+    void chatgpt.logout();
+    setResult(null);
+    setUsage(null);
+    setStatus(AnalysisStatus.IDLE);
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -178,7 +145,7 @@ const App: React.FC = () => {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (authStatus !== 'signed-in') { setError('Connectez-vous à ChatGPT avant de lancer le traitement.'); return; }
+    if (!chatgpt.isSignedIn) { setError('Connectez-vous à ChatGPT avant de lancer le traitement.'); return; }
     if (!mediaFile || !meetingDetails.title || !meetingDetails.date) return;
     setError(null);
     try {
@@ -195,8 +162,11 @@ const App: React.FC = () => {
   };
 
   const isProcessing = isProcessingStatus(status);
+  const authBusy = chatgpt.status === 'checking' || chatgpt.status === 'starting' || chatgpt.status === 'redirecting';
+  const authError = chatgpt.status === 'error' ? chatgpt.error.message : null;
+  const installUrl = chatgpt.status === 'needs-extension' ? chatgpt.installUrl : null;
   const statusLabel = status === AnalysisStatus.EXTRACTING_AUDIO ? 'Extraction audio…' : status === AnalysisStatus.UPLOADING ? 'Préparation…' : status === AnalysisStatus.TRANSCRIBING ? 'Transcription…' : status === AnalysisStatus.PROCESSING ? 'Création du compte rendu…' : status === AnalysisStatus.COMPLETED ? 'Compte rendu terminé' : status === AnalysisStatus.ERROR ? 'Erreur' : 'Prêt';
-  const authButtonLabel = authStatus === 'checking' ? 'Connexion…' : authStatus === 'needs-extension' ? 'Réessayer' : 'Se connecter avec ChatGPT';
+  const authButtonLabel = authBusy ? 'Connexion…' : chatgpt.status === 'needs-extension' ? 'Réessayer' : 'Se connecter avec ChatGPT';
 
   return (
     <div className="min-h-screen flex flex-col font-sans" style={{ background: ACCENT.pageBg, color: ACCENT.text }}>
@@ -208,15 +178,15 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <TokenTracker usage={usage} status={status} />
-            {authStatus === 'signed-in' ? (
+            {chatgpt.isSignedIn ? (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-100 text-xs font-semibold">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">ChatGPT connecté</span>
                 <button type="button" onClick={handleLogout} title="Se déconnecter" className="p-0.5 rounded-full hover:bg-emerald-100"><LogOut className="w-3.5 h-3.5" /></button>
               </div>
             ) : (
-              <button type="button" onClick={handleLogin} disabled={authStatus === 'checking'} className="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs font-bold text-white disabled:opacity-50" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>
-                {authStatus === 'checking' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+              <button type="button" onClick={handleLogin} disabled={authBusy} className="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs font-bold text-white disabled:opacity-50" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>
+                {authBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
                 <span className="hidden sm:inline">{authButtonLabel}</span>
               </button>
             )}
@@ -227,7 +197,7 @@ const App: React.FC = () => {
       {isProcessing && <div className="border-b bg-white/90 py-3 px-5" style={{ borderColor: ACCENT.border }}><div className="max-w-3xl mx-auto"><div className="flex justify-between mb-2"><span className="text-xs font-semibold" style={{ color: ACCENT.violet }}>{statusLabel}</span><span className="text-[10px] text-stone-500">{meetingDetails.title}</span></div><PipelineStepper status={status} /></div></div>}
 
       <main className="flex-1 max-w-7xl mx-auto px-5 py-8 w-full">
-        {(authError || authStatus === 'needs-extension') && <div className="mb-5 rounded-2xl border bg-white p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3" style={{ borderColor: authError ? '#FECACA' : ACCENT.border }}>
+        {(authError || installUrl) && <div className="mb-5 rounded-2xl border bg-white p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3" style={{ borderColor: authError ? '#FECACA' : ACCENT.border }}>
           <div className="flex gap-3 items-start">
             <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" style={{ color: authError ? '#DC2626' : ACCENT.violet }} />
             <div><p className="text-sm font-bold">{authError ? 'Authentification ChatGPT' : 'Extension de connexion requise'}</p><p className="text-xs text-stone-500 mt-1">{authError || "Installez l’extension Sign in with ChatGPT, puis revenez ici et cliquez sur Réessayer."}</p></div>
@@ -244,7 +214,7 @@ const App: React.FC = () => {
                 <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Date</label><input type="date" value={meetingDetails.date} onChange={e => setMeetingDetails(prev => ({ ...prev, date: e.target.value }))} required disabled={isProcessing} className="w-full rounded-2xl border px-4 py-3 text-sm bg-slate-50 outline-none" style={{ borderColor: ACCENT.border }} /></div>
                 <div><label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">Enregistrement</label>{!mediaFile ? <div onClick={() => !isProcessing && fileInputRef.current?.click()} className="rounded-2xl border-2 border-dashed p-7 text-center cursor-pointer bg-slate-50" style={{ borderColor: `${ACCENT.violet}55` }}><input ref={fileInputRef} type="file" onChange={handleFileChange} accept="video/mp4,.mp4,audio/x-m4a,audio/mp4,audio/m4a,.m4a" className="hidden" /><UploadCloud className="w-6 h-6 mx-auto mb-3" style={{ color: ACCENT.violet }} /><p className="text-sm font-bold">Glisser-déposer ou cliquer</p><p className="text-[10px] font-semibold uppercase text-stone-400 mt-1">MP4 ou M4A</p></div> : <FilePreview mediaFile={mediaFile} onClear={clearFile} disabled={isProcessing} />}</div>
                 {error && <div className="p-3 rounded-2xl flex gap-2 text-xs bg-red-50 border border-red-100 text-red-700"><AlertCircle className="w-4 h-4 shrink-0" />{error}</div>}
-                <button type="submit" disabled={authStatus !== 'signed-in' || !mediaFile || !meetingDetails.title || !meetingDetails.date || isProcessing} className="w-full px-4 py-3.5 rounded-full text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-40 flex items-center justify-center gap-2" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>{isProcessing && <Loader2 className="w-4 h-4 animate-spin" />}{isProcessing ? 'Traitement en cours…' : authStatus === 'signed-in' ? 'Générer le compte rendu' : 'Connexion ChatGPT requise'}</button>
+                <button type="submit" disabled={!chatgpt.isSignedIn || !mediaFile || !meetingDetails.title || !meetingDetails.date || isProcessing} className="w-full px-4 py-3.5 rounded-full text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-40 flex items-center justify-center gap-2" style={{ background: `linear-gradient(135deg,${ACCENT.violet},${ACCENT.violetDeep})` }}>{isProcessing && <Loader2 className="w-4 h-4 animate-spin" />}{isProcessing ? 'Traitement en cours…' : chatgpt.isSignedIn ? 'Générer le compte rendu' : 'Connexion ChatGPT requise'}</button>
               </form>
             </div>
           </section>

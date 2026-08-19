@@ -7,7 +7,8 @@ Isolated experiment derived from `benclawbot/Video-Meeting-Minutes-Manager` so c
 - MP4 video input is explicitly accepted.
 - M4A audio input is explicitly accepted.
 - Browser-side FFmpeg extracts the first audio track and produces 16 kHz WAV chunks.
-- The user authenticates once with ChatGPT OAuth in the browser. No provider API key or model selector is exposed.
+- The user authenticates with ChatGPT OAuth. No provider API key or model selector is exposed.
+- The maintained `@openai-oauth/react` client persists the signed-in session in encrypted browser storage and refreshes it when needed, so actions reuse the same login until the user disconnects or the authorization can no longer be refreshed.
 - Transcription is routed automatically to ChatGPT's authenticated transcription action.
 - Meeting-minutes generation is fixed to `gpt-5.6-sol` with `medium` reasoning effort.
 - Provider badges and provider-specific status wording have been removed from the interface.
@@ -17,7 +18,7 @@ Isolated experiment derived from `benclawbot/Video-Meeting-Minutes-Manager` so c
 
 ## OAuth flow
 
-The hosted web flow uses the ChatGPT OAuth browser handoff used by the open-source `openai-oauth` ecosystem. On desktop Chrome or Firefox, the Sign in with ChatGPT browser extension is required to securely return the OAuth authorization code to the hosted application. The resulting session is kept only for the current browser session and is forwarded to same-origin serverless routes when transcription or minutes generation is requested.
+The hosted web flow uses the open-source ChatGPT OAuth browser handoff supplied by `@openai-oauth/react`. On desktop Chrome or Firefox, the Sign in with ChatGPT browser extension is required to securely return the OAuth authorization code to the hosted application. Browser model requests are sent to same-origin serverless routes with the authenticated session headers.
 
 No ChatGPT access token is committed to the repository or stored in server environment variables.
 

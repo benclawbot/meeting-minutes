@@ -39,6 +39,17 @@ export const fetchCompanionStatus = async (): Promise<CompanionStatus> => {
   return data;
 };
 
+const waitForPaired = async (timeoutMs = 120_000): Promise<CompanionStatus> => {
+  const deadline = Date.now() + timeoutMs;
+  let last: CompanionStatus | null = null;
+  while (Date.now() < deadline) {
+    await delay(1000);
+    last = await fetchCompanionStatus();
+    if (last.paired) return last;
+  }
+  throw new Error('Ce site n’a pas été autorisé dans le compagnon local à temps.');
+};
+
 const waitForAuthentication = async (timeoutMs = 120_000): Promise<CompanionStatus> => {
   const deadline = Date.now() + timeoutMs;
   let last: CompanionStatus | null = null;
@@ -50,6 +61,12 @@ const waitForAuthentication = async (timeoutMs = 120_000): Promise<CompanionStat
   throw new Error(last?.paired
     ? 'La connexion Codex OAuth n’a pas été finalisée à temps.'
     : 'Ce site n’a pas encore été autorisé dans le compagnon local.');
+};
+
+const startCodexLogin = async () => {
+  const response = await fetch(`${COMPANION_URL}/login`, { method: 'POST' });
+  const payload = await response.json().catch(() => null) as { error?: string } | null;
+  if (!response.ok) throw new Error(payload?.error || 'Impossible de démarrer la connexion Codex.');
 };
 
 export const useSignInWithChatGPT = () => {
@@ -90,18 +107,20 @@ export const useSignInWithChatGPT = () => {
     try {
       let current = await fetchCompanionStatus();
       statusRef.current = current;
+
       if (!current.paired) {
         if (!current.pairUrl) throw new Error('Le compagnon n’a pas fourni de lien d’autorisation pour ce site.');
         window.open(current.pairUrl, '_blank', 'noopener,noreferrer');
         setStatus('redirecting');
-        current = await waitForAuthentication();
-      } else if (!current.authenticated) {
-        const response = await fetch(`${COMPANION_URL}/login`, { method: 'POST' });
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        if (!response.ok) throw new Error(payload?.error || 'Impossible de démarrer la connexion Codex.');
+        current = await waitForPaired();
+      }
+
+      if (!current.authenticated) {
+        await startCodexLogin();
         setStatus('redirecting');
         current = await waitForAuthentication();
       }
+
       statusRef.current = current;
       setStatus(current.authenticated ? 'signed-in' : 'signed-out');
     } catch (err) {

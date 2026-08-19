@@ -1,8 +1,8 @@
 import { FFmpeg, FFFSType, type FSNode } from "@ffmpeg/ffmpeg";
 import coreURL from "@ffmpeg/core?url";
 import wasmURL from "@ffmpeg/core/wasm?url";
+import { openaiAuthHeaders } from "@openai-oauth/react";
 import { AnalysisResult } from "../types";
-import { getChatGPTAuthHeaders } from "./chatgptOAuth";
 
 const TARGET_RATE = 16000;
 const CHUNK_DURATION_SEC = 90;
@@ -68,6 +68,8 @@ const responseError = async (response: Response, fallback: string) => {
   return payload?.error || fallback;
 };
 
+const authHeaders = () => openaiAuthHeaders();
+
 export const analyzeMeetingVideo = async (
   mediaFile: File,
   title: string,
@@ -88,11 +90,11 @@ export const analyzeMeetingVideo = async (
       const chunkData = await ffmpeg.readFile(chunkPath);
       const wavBlob = new Blob([chunkData], { type: "audio/wav" });
       await ffmpeg.deleteFile(chunkPath).catch(() => false);
-      const authHeaders = await getChatGPTAuthHeaders();
+      const headers = await authHeaders();
       const response = await fetch("/api/transcribe", {
         method: "POST",
         headers: {
-          ...authHeaders,
+          ...headers,
           "Content-Type": "audio/wav",
           "X-Audio-Filename": chunk.name,
           "X-Transcription-Language": locale,
@@ -115,10 +117,10 @@ export const analyzeMeetingVideo = async (
   if (!transcript.trim()) throw new Error("Aucun contenu audio détecté dans le fichier.");
 
   onStatusChange?.("PROCESSING");
-  const authHeaders = await getChatGPTAuthHeaders();
+  const headers = await authHeaders();
   const response = await fetch("/api/analyze", {
     method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({ title, date, transcript, locale }),
   });
   if (!response.ok) throw new Error(await responseError(response, "Erreur de génération"));

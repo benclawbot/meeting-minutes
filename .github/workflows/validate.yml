@@ -1,9 +1,6 @@
 name: Validate
 
 on:
-  push:
-    branches:
-      - feat/sites-chatgpt-oauth
   pull_request:
 
 permissions:

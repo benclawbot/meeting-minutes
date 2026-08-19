@@ -7,12 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "companion:start": "node companion/server.mjs",
+    "companion:check": "node --check companion/server.mjs"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
-    "@openai-oauth/react": "2.0.0",
     "docx": "8.5.0",
     "file-saver": "2.0.5",
     "lucide-react": "^0.564.0",
@@ -27,5 +28,8 @@
     "tailwindcss": "^4.2.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
+  },
+  "engines": {
+    "node": ">=20.10"
   }
 }

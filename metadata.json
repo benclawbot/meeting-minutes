@@ -1,0 +1,5 @@
+{
+  "name": "MeetingMind",
+  "description": "Meeting transcription and structured minutes generation experiment.",
+  "requestFramePermissions": []
+}

@@ -12,7 +12,10 @@
     "moduleDetection": "force",
     "allowJs": true,
     "jsx": "react-jsx",
-    "paths": {"@/*": ["./*"]},
+    "paths": {
+      "@/*": ["./*"],
+      "@openai-oauth/react": ["./services/localOAuth.ts"]
+    },
     "allowImportingTsExtensions": true,
     "noEmit": true
   }

@@ -1,0 +1,122 @@
+name: Bootstrap meeting-minutes experiment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-experiment.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Copy source application
+        run: |
+          git clone --depth 1 https://github.com/benclawbot/Video-Meeting-Minutes-Manager.git /tmp/source
+          rsync -a --exclude='.git' --exclude='LICENSE' /tmp/source/ ./
+
+      - name: Apply experiment changes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          app = Path('App.tsx')
+          text = app.read_text()
+          text = text.replace("  Zap,\n", "")
+          badge = '''            <div className="hidden md:flex items-center gap-1.5 ml-2 px-3 py-1.5 rounded-full text-[10px] font-semibold" style={{ background: '#F3F4F6', border: `1px solid ${ACCENT.border}`, color: '#374151' }}>
+              <Zap className="w-2.5 h-2.5" style={{ color: ACCENT.violet }} />Powered by MiniMax M3
+            </div>
+'''
+          text = text.replace(badge, '')
+          text = text.replace("const isVideo = file.type.startsWith('video/');\n    const isAudio = file.type.startsWith('audio/') || file.name.endsWith('.m4a');", "const lowerName = file.name.toLowerCase();\n    const isVideo = file.type.startsWith('video/') || lowerName.endsWith('.mp4');\n    const isAudio = file.type.startsWith('audio/') || lowerName.endsWith('.m4a');")
+          text = text.replace("case AnalysisStatus.UPLOADING: return 'Envoi vers Deepgram...';", "case AnalysisStatus.UPLOADING: return 'Envoi du fichier...';")
+          text = text.replace("case AnalysisStatus.PROCESSING: return 'Analyse MiniMax M3...';", "case AnalysisStatus.PROCESSING: return 'Analyse en cours...';")
+          text = text.replace('accept="video/*,audio/x-m4a,audio/mp4,audio/m4a,.m4a"', 'accept="video/mp4,.mp4,video/*,audio/x-m4a,audio/mp4,audio/m4a,.m4a"')
+          text = text.replace('>Vidéo ou M4A</p>', '>MP4 ou M4A</p>')
+          text = text.replace('MiniMax M3 analyse votre réunion.', 'Analyse de votre réunion en cours.')
+          app.write_text(text)
+
+          tracker = Path('components/TokenTracker.tsx')
+          text = tracker.read_text()
+          text = text.replace('Transcription (Groq Whisper)', 'Transcription')
+          text = text.replace('Analysis (MiniMax M2.5)', 'Analysis')
+          tracker.write_text(text)
+
+          analyze = Path('api/analyze.ts')
+          text = analyze.read_text()
+          text = text.replace("const MINIMAX_MODEL = 'minimax-m2.5';\n", "const MINIMAX_MODEL = 'minimax-m2.5';\n\nconst formatDocumentDate = (value: string) => {\n  const [year, month, day] = value.split('-');\n  return year && month && day ? `${day}.${month}.${year}` : value;\n};\n")
+          text = text.replace("  const { title, date, transcript } = body;\n", "  const { title, date, transcript } = body;\n  const formattedDate = formatDocumentDate(date);\n  const documentTitle = `${title} — ${formattedDate}`;\n")
+          text = text.replace('Génère un compte rendu professionnel en ${lang} pour la réunion "${title}" du ${date}.', 'Génère un compte rendu professionnel en ${lang} pour la réunion "${title}" du ${formattedDate}.')
+          text = text.replace('Le document doit commencer par exactement : # ${title}', 'Le document doit commencer par exactement : # ${documentTitle}')
+          text = text.replace('# ${title}\n\n## ${summary}', '# ${documentTitle}\n\n## ${summary}')
+          old_guard = '''    // Title guard: must start with "# <title>"
+    if (!text.startsWith('# ')) {
+      text = `# ${title}\\n\\n${text}`;
+    }
+
+    // Strip any preamble before first H1 if present
+    const firstTitleIndex = text.search(/^#\\s+/m);
+    if (firstTitleIndex > 0) {
+      text = text.substring(firstTitleIndex).trim();
+    }
+'''
+          new_guard = '''    // Strip any preamble before the first H1, then enforce the exact title/date.
+    const firstTitleIndex = text.search(/^#\\s+/m);
+    if (firstTitleIndex > 0) {
+      text = text.substring(firstTitleIndex).trim();
+    }
+    if (/^#\\s+.*$/m.test(text)) {
+      text = text.replace(/^#\\s+.*$/m, `# ${documentTitle}`);
+    } else {
+      text = `# ${documentTitle}\\n\\n${text}`;
+    }
+'''
+          if old_guard not in text:
+              raise SystemExit('Expected title guard not found in api/analyze.ts')
+          text = text.replace(old_guard, new_guard)
+          analyze.write_text(text)
+
+          docx = Path('services/docxService.ts')
+          text = docx.read_text()
+          text = text.replace('`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`', '`${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`')
+          docx.write_text(text)
+
+          metadata = Path('metadata.json')
+          text = metadata.read_text()
+          text = text.replace('using Minimax M2.7.', 'for structured meeting transcription and minutes generation.')
+          metadata.write_text(text)
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          text += '''\n\n## Experimental fork\n\nThis repository is an isolated test copy of `benclawbot/Video-Meeting-Minutes-Manager`. It is used to validate MP4/M4A handling and a future ChatGPT-native authentication/model path without changing the original application.\n\nThe UI intentionally does not advertise a specific inference provider. Generated minutes and DOCX filenames use `DD.MM.YYYY`; the generated H1 is `<meeting title> — DD.MM.YYYY`.\n'''
+          readme.write_text(text)
+
+          # This bootstrap workflow is one-shot; do not leave it in the application copy.
+          Path('.github/workflows/bootstrap-experiment.yml').unlink()
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit isolated baseline
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Bootstrap isolated meeting-minutes experiment"
+          git push origin HEAD:main

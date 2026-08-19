@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/meeting-minutes-banner.svg" alt="Meeting Minutes" width="100%" />
+</p>
+
 # meeting-minutes
 
 Isolated experiment derived from `benclawbot/Video-Meeting-Minutes-Manager` so changes can be tested without modifying the original application.
